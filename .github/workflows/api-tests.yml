@@ -2,7 +2,7 @@ name: API Tests
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, cinema ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -24,48 +24,59 @@ jobs:
   api-tests:
     name: Run API Tests
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Compose
         run: |
-          docker compose --version
-      
+          docker compose version
+
       - name: Start services with Docker Compose
         run: |
-          docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 120
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: tests/postman/package-lock.json
-      
-      - name: Install Newman and dependencies
-        working-directory: tests/postman
-        run: npm install
-      
+          docker compose up -d --build
+
+      - name: Wait for services to be ready
+        run: |
+          wait_for() {
+            local name="$1" url="$2" pattern="$3"
+            for i in $(seq 1 60); do
+              if curl -fsS "$url" 2>/dev/null | grep -q "$pattern"; then
+                echo "$name is ready"
+                return 0
+              fi
+              echo "Waiting for $name ($i/60)..."
+              sleep 5
+            done
+            echo "$name is not ready after 300s"
+            docker compose ps -a
+            docker compose logs --tail=100
+            return 1
+          }
+          wait_for "monolith"       "http://localhost:8080/health"             "."
+          wait_for "movies-service" "http://localhost:8081/api/movies/health"  "true"
+          wait_for "events-service" "http://localhost:8082/api/events/health"  '"producer":true'
+          wait_for "proxy-service"  "http://localhost:8000/health"             "true"
+
       - name: Run API tests
         working-directory: tests/postman
         run: |
-
-          docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 15
-          # Build the Docker image
           docker build -t cinemaabyss-api-tests .
-          
-          # Run the tests in Docker
           docker run --network=cinemaabyss-network -v "$(pwd)/reports:/app/reports" cinemaabyss-api-tests
-        
-      
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-reports
+          path: tests/postman/reports/
+          if-no-files-found: ignore
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
       - name: Stop services
         if: always()
-        run: docker compose down
+        run: docker compose down -v
