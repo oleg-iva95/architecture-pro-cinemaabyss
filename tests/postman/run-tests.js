@@ -1,7 +1,7 @@
 const newman = require('newman');
 const fs = require('fs');
 const path = require('path');
-const yargs = require('yargs/yargs');
+const yargs = require('yargs'); // 'yargs/yargs' ломается на Node.js >= 22.12 (ESM detection)
 const { hideBin } = require('yargs/helpers');
 
 // Parse command line arguments
