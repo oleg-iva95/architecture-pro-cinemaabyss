@@ -1,0 +1,45 @@
+# Circuit Breaker (Istio) для monolith и movies-service.
+# Применяется на стороне клиента: Envoy-sidecar вызывающего пода (например, fortio)
+# ограничивает пул соединений и выбрасывает «больные» эндпоинты из балансировки.
+#
+#   kubectl apply -f src/kubernetes/circuit-breaker-config.yaml -n cinemaabyss
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: monolith-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: monolith.cinemaabyss.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1            # не больше 1 TCP-соединения к сервису
+      http:
+        http1MaxPendingRequests: 1   # очередь ожидания: 1 запрос, остальные -> 503 (overflow)
+        maxRequestsPerConnection: 1  # без keep-alive: каждое соединение на 1 запрос
+    outlierDetection:
+      consecutive5xxErrors: 1        # 1 ошибка 5xx подряд -> эндпоинт исключается
+      interval: 1s                   # частота анализа
+      baseEjectionTime: 3m           # минимальное время исключения
+      maxEjectionPercent: 100        # можно исключить все эндпоинты
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: movies-service-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: movies-service.cinemaabyss.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1
+      http:
+        http1MaxPendingRequests: 1
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      consecutive5xxErrors: 1
+      interval: 1s
+      baseEjectionTime: 3m
+      maxEjectionPercent: 100

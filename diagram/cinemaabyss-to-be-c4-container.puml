@@ -1,0 +1,137 @@
+@startuml cinemaabyss-to-be-c4-container
+!include <C4/C4_Container>
+
+LAYOUT_TOP_DOWN()
+SHOW_PERSON_OUTLINE()
+skinparam wrapWidth 200
+skinparam maxMessageSize 140
+
+title Кинобездна - To-Be архитектура (C4: Container)
+
+AddElementTag("legacy", $bgColor="#9e9e9e", $borderColor="#616161", $legendText="Legacy (Strangler Fig)")
+AddElementTag("bus", $bgColor="#6a1b9a", $borderColor="#4a148c", $legendText="Шина событий")
+AddRelTag("async", $textColor="#6a1b9a", $lineColor="#6a1b9a", $lineStyle=DashedLine(), $legendText="Асинхронно (Kafka)")
+
+Person(viewer, "Зритель", "Смотрит и оценивает фильмы, оплачивает подписку")
+
+Boundary(clients, "Клиентские приложения", "клиенты") {
+  Container(web, "Web", "SPA", "Браузер")
+  Container(mobile, "Mobile", "iOS / Android", "Смартфоны")
+  Container(tv, "Smart TV", "TV-приложение", "Телевизоры")
+}
+
+Boundary(bff, "Backend for Frontend", "слой") {
+  Container(bff_web, "Web BFF", "Go", "API под Web")
+  Container(bff_mobile, "Mobile BFF", "Go", "API под мобильные")
+  Container(bff_tv, "TV BFF", "Go", "API под Smart TV")
+}
+
+System_Boundary(k8s, "Кинобездна") {
+
+  Container(gateway, "API Gateway (proxy-service)", "Go", "Единая точка входа, маршрутизация, Strangler Fig")
+
+  Boundary(d_identity, "Пользователи", "домен") {
+    Container(auth_svc, "Auth Service", "Go", "Аутентификация, JWT")
+    Container(users_svc, "Users Service", "Go", "Профили пользователей")
+    ContainerDb(users_db, "Users DB", "PostgreSQL", "Пользователи")
+  }
+
+  Boundary(d_catalog, "Каталог", "домен") {
+    Container(movies_svc, "Movies Service", "Go", "Метаданные фильмов")
+    ContainerDb(movies_db, "Movies DB", "PostgreSQL", "Фильмы, жанры, актёры")
+  }
+
+  Boundary(d_engagement, "Активность", "домен") {
+    Container(library_svc, "Library Service", "Go", "Оценки, избранное")
+    ContainerDb(library_db, "Library DB", "PostgreSQL", "Оценки, избранное")
+  }
+
+  Boundary(d_content, "Контент", "домен") {
+    Container(content_svc, "Content Service", "Go", "Импорт контента от партнёров")
+    Container(playback_svc, "Playback Service", "Go", "Выдача ссылок на видео")
+    ContainerDb(media_storage, "Media Storage", "S3", "Видеофайлы")
+  }
+
+  Boundary(d_billing, "Биллинг", "домен") {
+    Container(subs_svc, "Subscription Service", "Go", "Подписки")
+    Container(payments_svc, "Payment Service", "Go", "Платежи")
+    Container(promo_svc, "Discount Service", "Go", "Скидки, лояльность")
+    ContainerDb(billing_db, "Billing DB", "PostgreSQL", "Подписки, платежи, скидки")
+  }
+
+  Boundary(d_integration, "Интеграция", "слой") {
+    Container(events_svc, "Events Service", "Go", "Доменные события")
+    ContainerQueue(kafka, "Kafka", "Apache Kafka", "movie / user / payment events", $tags="bus")
+  }
+
+  Container(monolith, "Монолит", "Go", "Невынесенный функционал", $tags="legacy")
+  ContainerDb(legacy_db, "Legacy DB", "PostgreSQL", "Общая БД монолита", $tags="legacy")
+}
+
+System_Ext(ext_pay, "Платёжные системы", "")
+System_Ext(ext_loyalty, "Сервисы лояльности", "")
+System_Ext(ext_content, "Поставщики контента", "")
+
+' --- Вход ---
+Rel(viewer, web, "Использует")
+Rel(viewer, mobile, "Использует")
+Rel(viewer, tv, "Использует")
+Rel(web, bff_web, "", "HTTPS")
+Rel(mobile, bff_mobile, "", "HTTPS")
+Rel(tv, bff_tv, "", "HTTPS")
+Rel(bff_web, gateway, "", "HTTPS")
+Rel(bff_mobile, gateway, "", "HTTPS")
+Rel(bff_tv, gateway, "", "HTTPS")
+
+' --- Gateway -> сервисы ---
+Rel(gateway, auth_svc, "/api/auth", "REST")
+Rel(gateway, users_svc, "/api/users", "REST")
+Rel(gateway, movies_svc, "/api/movies (% по флагу)", "REST")
+Rel(gateway, library_svc, "/api/library", "REST")
+Rel(gateway, playback_svc, "/api/playback", "REST")
+Rel(gateway, subs_svc, "/api/subscriptions", "REST")
+Rel(gateway, events_svc, "/api/events", "REST")
+Rel(gateway, monolith, "Остальные маршруты", "REST")
+
+' --- Хранилища ---
+Rel(auth_svc, users_db, "", "SQL")
+Rel(users_svc, users_db, "", "SQL")
+Rel(movies_svc, movies_db, "", "SQL")
+Rel(library_svc, library_db, "", "SQL")
+Rel(content_svc, media_storage, "", "S3")
+Rel(subs_svc, billing_db, "", "SQL")
+Rel(payments_svc, billing_db, "", "SQL")
+Rel(promo_svc, billing_db, "", "SQL")
+Rel(monolith, legacy_db, "", "SQL")
+
+' --- Синхронные вызовы ---
+Rel(subs_svc, payments_svc, "Оплата", "REST")
+Rel(subs_svc, promo_svc, "Скидка", "REST")
+Rel(playback_svc, subs_svc, "Проверка доступа", "gRPC")
+
+' --- Внешние системы ---
+Rel(payments_svc, ext_pay, "", "HTTPS")
+Rel(promo_svc, ext_loyalty, "", "HTTPS")
+Rel(content_svc, ext_content, "", "HTTPS")
+
+' --- Kafka ---
+Rel(events_svc, kafka, "pub / sub", $tags="async")
+Rel(users_svc, kafka, "user-events", $tags="async")
+Rel(movies_svc, kafka, "movie-events", $tags="async")
+Rel(library_svc, kafka, "movie-events", $tags="async")
+Rel(content_svc, kafka, "movie-events", $tags="async")
+Rel(payments_svc, kafka, "payment-events", $tags="async")
+Rel(subs_svc, kafka, "payment-events", $tags="async")
+Rel(kafka, monolith, "Синхронизация на время миграции", $tags="async")
+
+' --- Раскладка ---
+Lay_D(viewer, mobile)
+Lay_D(mobile, bff_mobile)
+Lay_D(bff_mobile, gateway)
+Lay_R(web, mobile)
+Lay_R(mobile, tv)
+Lay_R(bff_web, bff_mobile)
+Lay_R(bff_mobile, bff_tv)
+
+SHOW_LEGEND()
+@enduml
